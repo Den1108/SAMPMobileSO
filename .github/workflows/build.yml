@@ -67,13 +67,13 @@ jobs:
       - name: Configure Application.mk for ${{ matrix.arch }}
         run: |
           cat > jni/Application.mk << EOF
-APP_ABI := ${{ matrix.arch }}
-APP_PLATFORM := android-16
-APP_STL := c++_static
-APP_OPTIM := release
-APP_CPPFLAGS := -frtti -fexceptions
-NDK_TOOLCHAIN_VERSION := clang
-EOF
+          APP_ABI := ${{ matrix.arch }}
+          APP_PLATFORM := android-16
+          APP_STL := c++_static
+          APP_OPTIM := release
+          APP_CPPFLAGS := -frtti -fexceptions
+          NDK_TOOLCHAIN_VERSION := clang
+          EOF
           
           echo "Application.mk создан:"
           cat jni/Application.mk
@@ -83,17 +83,15 @@ EOF
           # Создаем Android.mk если его нет
           if [ ! -f jni/Android.mk ]; then
             cat > jni/Android.mk << 'EOF'
-LOCAL_PATH := $(call my-dir)
-include $(CLEAR_VARS)
-
-LOCAL_MODULE := samp
-LOCAL_SRC_FILES := $(wildcard $(LOCAL_PATH)/*.cpp)
-LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
-LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
-LOCAL_CPPFLAGS := -frtti -fexceptions -std=c++11
-
-include $(BUILD_SHARED_LIBRARY)
-EOF
+          LOCAL_PATH := $(call my-dir)
+          include $(CLEAR_VARS)
+          LOCAL_MODULE := samp
+          LOCAL_SRC_FILES := $(wildcard $(LOCAL_PATH)/*.cpp)
+          LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
+          LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
+          LOCAL_CPPFLAGS := -frtti -fexceptions -std=c++11
+          include $(BUILD_SHARED_LIBRARY)
+          EOF
             echo "Android.mk создан"
           else
             echo "Android.mk уже существует"
@@ -129,17 +127,13 @@ EOF
 
       - name: Build with ndk-build for ${{ matrix.arch }}
         run: |
-          # Важно: указываем NDK_PROJECT_PATH
           export NDK_PROJECT_PATH=$(pwd)
-          
           echo "NDK_PROJECT_PATH: $NDK_PROJECT_PATH"
-          echo "Содержимое текущей папки:"
-          ls -la
-          echo "Содержимое jni:"
-          ls -la jni/
           
-          # Запускаем ndk-build
-          ${{ steps.setup-ndk.outputs.ndk-path }}/ndk-build NDK_PROJECT_PATH=$(pwd) APP_BUILD_SCRIPT=$(pwd)/jni/Android.mk NDK_APPLICATION_MK=$(pwd)/jni/Application.mk
+          ${{ steps.setup-ndk.outputs.ndk-path }}/ndk-build \
+            NDK_PROJECT_PATH=$(pwd) \
+            APP_BUILD_SCRIPT=$(pwd)/jni/Android.mk \
+            NDK_APPLICATION_MK=$(pwd)/jni/Application.mk
           
           echo "Результат сборки:"
           ls -la libs/ || echo "Папка libs не создана"
@@ -151,14 +145,10 @@ EOF
           
           if [ -f libs/${{ matrix.arch }}/libsamp.so ]; then
             echo "✅ libsamp.so успешно создан для ${{ matrix.arch }}"
-            file libs/${{ matrix.arch }}/libsamp.so
           elif [ -f obj/local/${{ matrix.arch }}/libsamp.so ]; then
             echo "✅ libsamp.so найден в obj/local/${{ matrix.arch }}/libsamp.so"
-            file obj/local/${{ matrix.arch }}/libsamp.so
           else
             echo "❌ Ошибка: libsamp.so не найден!"
-            echo "Содержимое папки проекта:"
-            find . -type f -name "*.so" | head -20
             exit 1
           fi
 
@@ -187,46 +177,25 @@ EOF
         run: |
           mkdir -p final-package
           
-          echo "Скачанные артефакты:"
-          ls -la downloaded-artifacts/
+          # Копируем библиотеки, проверяя существование папок
+          find downloaded-artifacts/ -name "libsamp.so" -exec cp {} final-package/ \;
           
-          # Копируем библиотеки
-          if [ -f "downloaded-artifacts/libsamp-so-armeabi-v7a/libsamp.so" ]; then
-            cp downloaded-artifacts/libsamp-so-armeabi-v7a/libsamp.so final-package/armeabi-v7a-libsamp.so
-            echo "✅ Добавлена armeabi-v7a"
-          fi
-          
-          if [ -f "downloaded-artifacts/libsamp-so-arm64-v8a/libsamp.so" ]; then
-            cp downloaded-artifacts/libsamp-so-arm64-v8a/libsamp.so final-package/arm64-v8a-libsamp.so
-            echo "✅ Добавлена arm64-v8a"
-          fi
+          # Переименуем для ясности, если они нашлись
+          [ -f "downloaded-artifacts/libsamp-so-armeabi-v7a/libsamp.so" ] && mv final-package/libsamp.so final-package/armeabi-v7a-libsamp.so || true
           
           # Создаем README
           SERVER_IP="${{ secrets.SERVER_IP }}"
           SERVER_PORT="${{ secrets.SERVER_PORT }}"
-          
           [ -z "$SERVER_IP" ] && SERVER_IP="188.127.241.8"
           [ -z "$SERVER_PORT" ] && SERVER_PORT="1179"
           
           cat > final-package/README.txt << EOF
-SAMP Mobile Libraries
-=====================
-
-Дата сборки: $(date)
-IP сервера: $SERVER_IP
-Порт: $SERVER_PORT
-
-Файлы:
-$(ls -la final-package/)
-
-Установка:
-1. Распакуйте APK
-2. Замените libsamp.so в соответствующих папках
-3. Соберите APK обратно
-EOF
-          
-          echo "Финальный пакет:"
-          ls -la final-package/
+          SAMP Mobile Libraries
+          =====================
+          Дата сборки: $(date)
+          IP сервера: $SERVER_IP
+          Порт: $SERVER_PORT
+          EOF
           
       - name: Upload final package
         uses: actions/upload-artifact@v4
