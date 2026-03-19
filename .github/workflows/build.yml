@@ -44,25 +44,25 @@ jobs:
 
       - name: Prepare project structure
         run: |
-          # Создаем временную папку для сборки
-          mkdir -p jni_build
+          # Создаем структуру jni правильно:
+          # 1. Создаем временную папку вне текущего каталога
+          mkdir -p ../temp_jni
           
-          # Копируем ВЕСЬ проект во временную папку jni_build
-          # Это сохранит папку vendor и все вложенные зависимости
-          cp -r . jni_build/
+          # 2. Копируем всё содержимое репозитория туда
+          cp -r . ../temp_jni/
           
-          # Переименовываем для ndk-build (он ищет папку с именем jni)
-          mv jni_build jni
+          # 3. Возвращаем её в корень проекта как 'jni'
+          mv ../temp_jni ./jni
           
-          # Удаляем старые артефакты, если они случайно скопировались
-          rm -rf jni/libs jni/obj jni/.github
+          # Удаляем лишние папки, чтобы ndk-build не запутался
+          rm -rf jni/libs jni/obj jni/.github jni/.git
           
-          echo "Структура папки jni/vendor:"
-          ls -R jni/vendor || echo "Папка vendor не найдена!"
+          echo "Проверка наличия vendor:"
+          ls -d jni/vendor || echo "ОШИБКА: Папка vendor не найдена!"
 
       - name: Configure Build Files
         run: |
-          # Перезаписываем Application.mk внутри новой структуры jni
+          # Application.mk
           cat > jni/Application.mk << EOF
           APP_ABI := ${{ matrix.arch }}
           APP_PLATFORM := android-${{ matrix.api-level }}
@@ -71,13 +71,13 @@ jobs:
           APP_CPPFLAGS := -frtti -fexceptions
           EOF
 
-          # Создаем Android.mk, который будет искать файлы рекурсивно
+          # Android.mk с поддержкой вложенных папок
           cat > jni/Android.mk << 'EOF'
           LOCAL_PATH := $(call my-dir)
           include $(CLEAR_VARS)
           LOCAL_MODULE := samp
           
-          # Рекурсивный поиск всех .cpp файлов в jni и подпапках (включая vendor)
+          # Рекурсивный поиск всех .cpp файлов
           define walk
               $(wildcard $(1)/*.cpp) $(foreach e, $(wildcard $(1)/*), $(call walk, $(e)))
           endef
@@ -85,8 +85,11 @@ jobs:
           ALL_FILES := $(call walk, $(LOCAL_PATH))
           LOCAL_SRC_FILES := $(ALL_FILES:$(LOCAL_PATH)/%=%)
           
-          # Добавляем корень jni в пути поиска include
-          LOCAL_C_INCLUDES := $(LOCAL_PATH) $(LOCAL_PATH)/vendor
+          # Пути для поиска include (важно для vendor/RakNet)
+          LOCAL_C_INCLUDES := $(LOCAL_PATH) \
+                              $(LOCAL_PATH)/vendor \
+                              $(LOCAL_PATH)/vendor/RakNet \
+                              $(LOCAL_PATH)/vendor/RakNet/SAMP
           
           LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
           LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
@@ -102,18 +105,20 @@ jobs:
           [ -z "$SERVER_IP" ] && SERVER_IP="188.127.241.8"
           [ -z "$SERVER_PORT" ] && SERVER_PORT="1179"
           
-          # Ищем main.cpp везде в папке jni
-          MAIN_PATH=$(find jni -name "main.cpp")
-          if [ -f "$MAIN_PATH" ]; then
-            sed -i "s/encryptedAddress\.decrypt()/\"$SERVER_IP\"/g" "$MAIN_PATH"
-            sed -i "s/port,/$SERVER_PORT,/g" "$MAIN_PATH"
-            echo "Настройки сервера обновлены в $MAIN_PATH"
+          # Ищем main.cpp внутри новой структуры jni
+          MAIN_FILE=$(find jni -name "main.cpp" | head -n 1)
+          if [ -f "$MAIN_FILE" ]; then
+            sed -i "s/encryptedAddress\.decrypt()/\"$SERVER_IP\"/g" "$MAIN_FILE"
+            sed -i "s/port,/$SERVER_PORT,/g" "$MAIN_FILE"
+            echo "Настройки сервера обновлены в $MAIN_FILE"
+          else
+            echo "ОШИБКА: main.cpp не найден!"
+            exit 1
           fi
 
       - name: Build with ndk-build
         run: |
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
-          # Запускаем сборку из корня, ndk-build подхватит папку jni
           $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=$(pwd) \
             -j$(nproc)
@@ -123,3 +128,4 @@ jobs:
         with:
           name: libsamp-${{ matrix.arch }}
           path: libs/${{ matrix.arch }}/libsamp.so
+          if-no-files-found: error
