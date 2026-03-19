@@ -12,14 +12,11 @@ jobs:
     strategy:
       matrix:
         arch: [armeabi-v7a, arm64-v8a]
-        # Для arm64-v8a потребуется более новая версия NDK
         include:
           - arch: armeabi-v7a
             ndk-version: r19c
-            target: arm
           - arch: arm64-v8a
-            ndk-version: r23c  # Более новая версия для 64-бит
-            target: arm64
+            ndk-version: r23c
     
     steps:
       - name: Checkout repository
@@ -43,7 +40,7 @@ jobs:
 
       - name: Configure Application.mk for ${{ matrix.arch }}
         run: |
-          # Создаем временный Application.mk с нужными параметрами
+          # Создаем Application.mk с нужными параметрами
           cat > jni/Application.mk << EOF
           APP_ABI := ${{ matrix.arch }}
           APP_PLATFORM := android-16
@@ -53,25 +50,24 @@ jobs:
           NDK_TOOLCHAIN_VERSION := clang
           EOF
           
-          echo "✅ Application.mk настроен для ${{ matrix.arch }}:"
+          echo "Application.mk настроен для ${{ matrix.arch }}:"
           cat jni/Application.mk
 
-      - name: Configure server IP (from Secrets)
+      - name: Configure server IP
         run: |
-          # Используем секреты GitHub для безопасного хранения IP и порта
-          # Как настроить секреты: https://docs.github.com/ru/actions/security-guides/using-secrets-in-github-actions
+          # Получаем значения из секретов
           SERVER_IP="${{ secrets.SERVER_IP }}"
           SERVER_PORT="${{ secrets.SERVER_PORT }}"
           
           # Значения по умолчанию, если секреты не заданы
           if [ -z "$SERVER_IP" ]; then
-            SERVER_IP="127.0.0.1"
-            echo "⚠️  SERVER_IP не задан, использую 127.0.0.1"
+            SERVER_IP="188.127.241.8"
+            echo "SERVER_IP не задан, использую 188.127.241.8"
           fi
           
           if [ -z "$SERVER_PORT" ]; then
-            SERVER_PORT="7777"
-            echo "⚠️  SERVER_PORT не задан, использую 7777"
+            SERVER_PORT="1179"
+            echo "SERVER_PORT не задан, использую 1179"
           fi
           
           # Создаем резервную копию
@@ -81,8 +77,8 @@ jobs:
           sed -i "s/encryptedAddress\.decrypt()/\"$SERVER_IP\"/g" jni/main.cpp
           sed -i "s/port,/$SERVER_PORT,/g" jni/main.cpp
           
-          echo "✅ IP и порт установлены: $SERVER_IP:$SERVER_PORT"
-          echo "📄 Изменения в main.cpp:"
+          echo "IP и порт установлены: $SERVER_IP:$SERVER_PORT"
+          echo "Изменения в main.cpp:"
           grep -A 3 -B 3 "CNetGame" jni/main.cpp || true
 
       - name: Build with ndk-build for ${{ matrix.arch }}
@@ -91,18 +87,18 @@ jobs:
           ${{ steps.setup-ndk.outputs.ndk-path }}/ndk-build
           cd ..
           
-          echo "✅ Сборка завершена для ${{ matrix.arch }}"
+          echo "Сборка завершена для ${{ matrix.arch }}"
 
       - name: Verify library exists
         run: |
           if [ -f libs/${{ matrix.arch }}/libsamp.so ]; then
-            echo "✅ libsamp.so успешно создан для ${{ matrix.arch }}"
+            echo "libsamp.so успешно создан для ${{ matrix.arch }}"
             file libs/${{ matrix.arch }}/libsamp.so
           else
-            echo "❌ Ошибка: libsamp.so не найден для ${{ matrix.arch }}"
-            echo "📁 Содержимое libs/:"
+            echo "Ошибка: libsamp.so не найден для ${{ matrix.arch }}"
+            echo "Содержимое libs/:"
             ls -la libs/ || true
-            echo "📁 Содержимое libs/${{ matrix.arch }}/:"
+            echo "Содержимое libs/${{ matrix.arch }}/:"
             ls -la libs/${{ matrix.arch }}/ || true
             exit 1
           fi
@@ -113,13 +109,12 @@ jobs:
           name: libsamp-so-${{ matrix.arch }}
           path: libs/${{ matrix.arch }}/libsamp.so
           if-no-files-found: error
-          retention-days: 90  # Хранить артефакты 90 дней
+          retention-days: 90
 
-  # Дополнительная задача для сборки обоих архитектур в один архив
   package:
     needs: build
     runs-on: ubuntu-latest
-    if: always()  # Запускаем даже если одна из сборок упала
+    if: always()
     
     steps:
       - name: Download all artifacts
@@ -134,10 +129,24 @@ jobs:
           # Копируем библиотеки если они есть
           if [ -d "downloaded-artifacts/libsamp-so-armeabi-v7a" ]; then
             cp downloaded-artifacts/libsamp-so-armeabi-v7a/libsamp.so final-package/armeabi-v7a-libsamp.so
+            echo "Добавлена библиотека для armeabi-v7a"
           fi
           
           if [ -d "downloaded-artifacts/libsamp-so-arm64-v8a" ]; then
             cp downloaded-artifacts/libsamp-so-arm64-v8a/libsamp.so final-package/arm64-v8a-libsamp.so
+            echo "Добавлена библиотека для arm64-v8a"
+          fi
+          
+          # Получаем IP и порт из секретов (безопасно)
+          SERVER_IP="${{ secrets.SERVER_IP }}"
+          SERVER_PORT="${{ secrets.SERVER_PORT }}"
+          
+          if [ -z "$SERVER_IP" ]; then
+            SERVER_IP="127.0.0.1"
+          fi
+          
+          if [ -z "$SERVER_PORT" ]; then
+            SERVER_PORT="7777"
           fi
           
           # Создаем README с информацией
@@ -152,13 +161,19 @@ jobs:
           - arm64-v8a: для современных 64-битных устройств
           
           Инструкция по установке:
-          1. Распакуйте APK игры через ApkEditor
-          2. Замените файл в lib/armeabi-v7a/libsamp.so (или lib/arm64-v8a/)
-          3. Соберите APK обратно
+          1. Распакуйте APK игры через APK Editor
+          2. Замените файл libsamp.so в папке lib/armeabi-v7a/ или lib/arm64-v8a/
+          3. Соберите APK обратно и подпишите его
           
-          IP сервера: ${{ secrets.SERVER_IP || '127.0.0.1' }}
-          Порт: ${{ secrets.SERVER_PORT || '7777' }}
+          Настройки сервера:
+          - IP: $SERVER_IP
+          - Порт: $SERVER_PORT
+          
+          Примечание: эти настройки уже вшиты в библиотеку при компиляции
           EOF
+          
+          echo "Создан финальный пакет:"
+          ls -la final-package/
           
       - name: Upload final package
         uses: actions/upload-artifact@v4
