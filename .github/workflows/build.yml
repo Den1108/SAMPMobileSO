@@ -40,7 +40,7 @@ jobs:
 
       - name: Prepare project structure
         run: |
-          # Создаем папку jni и переносим файлы
+          # Создаем папку jni если её нет
           mkdir -p jni
           
           # Ищем все исходные файлы в проекте
@@ -67,13 +67,13 @@ jobs:
       - name: Configure Application.mk for ${{ matrix.arch }}
         run: |
           cat > jni/Application.mk << EOF
-          APP_ABI := ${{ matrix.arch }}
-          APP_PLATFORM := android-16
-          APP_STL := c++_static
-          APP_OPTIM := release
-          APP_CPPFLAGS := -frtti -fexceptions
-          NDK_TOOLCHAIN_VERSION := clang
-          EOF
+APP_ABI := ${{ matrix.arch }}
+APP_PLATFORM := android-16
+APP_STL := c++_static
+APP_OPTIM := release
+APP_CPPFLAGS := -frtti -fexceptions
+NDK_TOOLCHAIN_VERSION := clang
+EOF
           
           echo "Application.mk создан:"
           cat jni/Application.mk
@@ -83,17 +83,17 @@ jobs:
           # Создаем Android.mk если его нет
           if [ ! -f jni/Android.mk ]; then
             cat > jni/Android.mk << 'EOF'
-            LOCAL_PATH := $(call my-dir)
-            include $(CLEAR_VARS)
-            
-            LOCAL_MODULE := samp
-            LOCAL_SRC_FILES := $(wildcard $(LOCAL_PATH)/*.cpp)
-            LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
-            LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
-            LOCAL_CPPFLAGS := -frtti -fexceptions -std=c++11
-            
-            include $(BUILD_SHARED_LIBRARY)
-            EOF
+LOCAL_PATH := $(call my-dir)
+include $(CLEAR_VARS)
+
+LOCAL_MODULE := samp
+LOCAL_SRC_FILES := $(wildcard $(LOCAL_PATH)/*.cpp)
+LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
+LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
+LOCAL_CPPFLAGS := -frtti -fexceptions -std=c++11
+
+include $(BUILD_SHARED_LIBRARY)
+EOF
             echo "Android.mk создан"
           else
             echo "Android.mk уже существует"
@@ -152,9 +152,9 @@ jobs:
           if [ -f libs/${{ matrix.arch }}/libsamp.so ]; then
             echo "✅ libsamp.so успешно создан для ${{ matrix.arch }}"
             file libs/${{ matrix.arch }}/libsamp.so
-          elif [ -f libs/${{ matrix.arch }}/libsamp.so ]; then
-            echo "✅ libsamp.so успешно создан для ${{ matrix.arch }}"
-            file libs/${{ matrix.arch }}/libsamp.so
+          elif [ -f obj/local/${{ matrix.arch }}/libsamp.so ]; then
+            echo "✅ libsamp.so найден в obj/local/${{ matrix.arch }}/libsamp.so"
+            file obj/local/${{ matrix.arch }}/libsamp.so
           else
             echo "❌ Ошибка: libsamp.so не найден!"
             echo "Содержимое папки проекта:"
@@ -209,21 +209,21 @@ jobs:
           [ -z "$SERVER_PORT" ] && SERVER_PORT="1179"
           
           cat > final-package/README.txt << EOF
-          SAMP Mobile Libraries
-          =====================
-          
-          Дата сборки: $(date)
-          IP сервера: $SERVER_IP
-          Порт: $SERVER_PORT
-          
-          Файлы:
-          $(ls -la final-package/)
-          
-          Установка:
-          1. Распакуйте APK
-          2. Замените libsamp.so в соответствующих папках
-          3. Соберите APK обратно
-          EOF
+SAMP Mobile Libraries
+=====================
+
+Дата сборки: $(date)
+IP сервера: $SERVER_IP
+Порт: $SERVER_PORT
+
+Файлы:
+$(ls -la final-package/)
+
+Установка:
+1. Распакуйте APK
+2. Замените libsamp.so в соответствующих папках
+3. Соберите APK обратно
+EOF
           
           echo "Финальный пакет:"
           ls -la final-package/
