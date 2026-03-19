@@ -17,7 +17,8 @@ jobs:
             ndk-version: r19c
             api-level: 19
           - arch: arm64-v8a
-            ndk-version: r23c
+            # Заменяем r23c на r21e (самая стабильная для ndk-build) или r26b
+            ndk-version: r21e 
             api-level: 21
     
     steps:
@@ -38,15 +39,17 @@ jobs:
         with:
           ndk-version: ${{ matrix.ndk-version }}
           add-to-path: true
-          local-cache: true
 
       - name: Prepare project structure
         run: |
           mkdir -p jni
-          # Копируем только файлы из корня, чтобы не зациклиться
+          # Копируем исходники, игнорируя саму папку jni
           find . -maxdepth 1 -name "*.cpp" -exec cp {} jni/ \;
           find . -maxdepth 1 -name "*.h" -exec cp {} jni/ \;
           find . -maxdepth 1 -name "*.hpp" -exec cp {} jni/ \;
+          
+          # Проверка наличия файлов
+          ls -la jni/
 
       - name: Configure Application.mk
         run: |
@@ -56,7 +59,6 @@ jobs:
           APP_STL := c++_static
           APP_OPTIM := release
           APP_CPPFLAGS := -frtti -fexceptions
-          # СТРОГО ЗАПРЕЩЕНО для r23+: NDK_TOOLCHAIN_VERSION
           EOF
 
       - name: Configure Android.mk
@@ -66,9 +68,9 @@ jobs:
           include $(CLEAR_VARS)
           LOCAL_MODULE := samp
           
-          # Корректный поиск файлов внутри папки jni
-          MY_SOURCES := $(wildcard $(LOCAL_PATH)/*.cpp)
-          LOCAL_SRC_FILES := $(MY_SOURCES:$(LOCAL_PATH)/%=%)
+          # Находим все cpp файлы в папке jni
+          FILE_LIST := $(wildcard $(LOCAL_PATH)/*.cpp)
+          LOCAL_SRC_FILES := $(FILE_LIST:$(LOCAL_PATH)/%=%)
           
           LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
           LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
@@ -79,23 +81,34 @@ jobs:
 
       - name: Build with ndk-build
         run: |
-          # Принудительно задаем пути, чтобы ndk-build не терялся
+          # Устанавливаем переменные окружения явно
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
+          export PATH=$ANDROID_NDK_HOME:$PATH
           
-          $ANDROID_NDK_HOME/ndk-build \
+          echo "Используем NDK из: $ANDROID_NDK_HOME"
+          
+          # Запуск сборки
+          ndk-build \
             NDK_PROJECT_PATH=$(pwd) \
             NDK_APPLICATION_MK=$(pwd)/jni/Application.mk \
             APP_BUILD_SCRIPT=$(pwd)/jni/Android.mk \
             -j$(nproc)
 
-      - name: Verify and Upload
-        if: success()
+      - name: Verify Build
+        run: |
+          if [ -d "libs/${{ matrix.arch }}" ]; then
+            ls -la libs/${{ matrix.arch }}/
+          else
+            echo "Ошибка: Библиотеки не найдены в libs/"
+            find . -name "*.so"
+            exit 1
+          fi
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: libsamp-${{ matrix.arch }}
-          path: |
-            libs/${{ matrix.arch }}/libsamp.so
-            obj/local/${{ matrix.arch }}/libsamp.so
+          path: libs/${{ matrix.arch }}/libsamp.so
 
   package:
     needs: build
@@ -109,12 +122,17 @@ jobs:
 
       - name: Prepare Final Package
         run: |
-          mkdir -p final-output
-          find all-libs/ -name "*.so" -exec cp {} final-output/ \;
-          ls -R final-output/
+          mkdir -p final-package/armeabi-v7a
+          mkdir -p final-package/arm64-v8a
+          
+          [ -f all-libs/libsamp-armeabi-v7a/libsamp.so ] && cp all-libs/libsamp-armeabi-v7a/libsamp.so final-package/armeabi-v7a/
+          [ -f all-libs/libsamp-arm64-v8a/libsamp.so ] && cp all-libs/libsamp-arm64-v8a/libsamp.so final-package/arm64-v8a/
+          
+          echo "Итоговый пакет:"
+          ls -R final-package/
 
       - name: Upload Complete Build
         uses: actions/upload-artifact@v4
         with:
           name: samp-mobile-complete
-          path: final-output/
+          path: final-package/
