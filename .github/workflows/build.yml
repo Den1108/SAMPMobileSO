@@ -8,17 +8,18 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30 # Увеличиваем время ожидания для распаковки NDK
     
     strategy:
+      fail-fast: false
       matrix:
         arch: [armeabi-v7a, arm64-v8a]
         include:
           - arch: armeabi-v7a
-            ndk-version: r19c
+            ndk-version: r21e
             api-level: 19
           - arch: arm64-v8a
-            # Заменяем r23c на r21e (самая стабильная для ndk-build) или r26b
-            ndk-version: r21e 
+            ndk-version: r21e
             api-level: 21
     
     steps:
@@ -39,20 +40,24 @@ jobs:
         with:
           ndk-version: ${{ matrix.ndk-version }}
           add-to-path: true
+          local-cache: true # Включает встроенное кэширование экшена
 
       - name: Prepare project structure
         run: |
           mkdir -p jni
-          # Копируем исходники, игнорируя саму папку jni
+          # Копируем исходники аккуратно
           find . -maxdepth 1 -name "*.cpp" -exec cp {} jni/ \;
           find . -maxdepth 1 -name "*.h" -exec cp {} jni/ \;
           find . -maxdepth 1 -name "*.hpp" -exec cp {} jni/ \;
           
-          # Проверка наличия файлов
-          ls -la jni/
+          if [ ! -f jni/main.cpp ]; then
+            echo "ВНИМАНИЕ: main.cpp не найден в корне, проверяем подпапки..."
+            find . -name "main.cpp" -exec cp {} jni/ \;
+          fi
 
-      - name: Configure Application.mk
+      - name: Configure Build Files
         run: |
+          # Создаем Application.mk
           cat > jni/Application.mk << EOF
           APP_ABI := ${{ matrix.arch }}
           APP_PLATFORM := android-${{ matrix.api-level }}
@@ -61,16 +66,15 @@ jobs:
           APP_CPPFLAGS := -frtti -fexceptions
           EOF
 
-      - name: Configure Android.mk
-        run: |
+          # Создаем Android.mk
           cat > jni/Android.mk << 'EOF'
           LOCAL_PATH := $(call my-dir)
           include $(CLEAR_VARS)
           LOCAL_MODULE := samp
           
-          # Находим все cpp файлы в папке jni
-          FILE_LIST := $(wildcard $(LOCAL_PATH)/*.cpp)
-          LOCAL_SRC_FILES := $(FILE_LIST:$(LOCAL_PATH)/%=%)
+          # Поиск всех файлов в jni
+          MY_SOURCES := $(wildcard $(LOCAL_PATH)/*.cpp)
+          LOCAL_SRC_FILES := $(MY_SOURCES:$(LOCAL_PATH)/%=%)
           
           LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
           LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
@@ -79,60 +83,62 @@ jobs:
           include $(BUILD_SHARED_LIBRARY)
           EOF
 
+      - name: Configure server IP and Port
+        run: |
+          SERVER_IP="${{ secrets.SERVER_IP }}"
+          SERVER_PORT="${{ secrets.SERVER_PORT }}"
+          [ -z "$SERVER_IP" ] && SERVER_IP="188.127.241.8"
+          [ -z "$SERVER_PORT" ] && SERVER_PORT="1179"
+          
+          if [ -f jni/main.cpp ]; then
+            sed -i "s/encryptedAddress\.decrypt()/\"$SERVER_IP\"/g" jni/main.cpp
+            sed -i "s/port,/$SERVER_PORT,/g" jni/main.cpp
+            echo "Настройки сервера обновлены в main.cpp"
+          fi
+
       - name: Build with ndk-build
         run: |
-          # Устанавливаем переменные окружения явно
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
-          export PATH=$ANDROID_NDK_HOME:$PATH
-          
-          echo "Используем NDK из: $ANDROID_NDK_HOME"
-          
-          # Запуск сборки
-          ndk-build \
+          $ANDROID_NDK_HOME/ndk-build \
             NDK_PROJECT_PATH=$(pwd) \
             NDK_APPLICATION_MK=$(pwd)/jni/Application.mk \
             APP_BUILD_SCRIPT=$(pwd)/jni/Android.mk \
             -j$(nproc)
 
-      - name: Verify Build
-        run: |
-          if [ -d "libs/${{ matrix.arch }}" ]; then
-            ls -la libs/${{ matrix.arch }}/
-          else
-            echo "Ошибка: Библиотеки не найдены в libs/"
-            find . -name "*.so"
-            exit 1
-          fi
-
-      - name: Upload Artifacts
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: libsamp-${{ matrix.arch }}
           path: libs/${{ matrix.arch }}/libsamp.so
+          if-no-files-found: error
 
   package:
     needs: build
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          path: all-libs
+          path: libs-dist
 
-      - name: Prepare Final Package
+      - name: Create Final Structure
         run: |
-          mkdir -p final-package/armeabi-v7a
-          mkdir -p final-package/arm64-v8a
+          mkdir -p final-dist/armeabi-v7a
+          mkdir -p final-dist/arm64-v8a
           
-          [ -f all-libs/libsamp-armeabi-v7a/libsamp.so ] && cp all-libs/libsamp-armeabi-v7a/libsamp.so final-package/armeabi-v7a/
-          [ -f all-libs/libsamp-arm64-v8a/libsamp.so ] && cp all-libs/libsamp-arm64-v8a/libsamp.so final-package/arm64-v8a/
+          find libs-dist/ -name "libsamp.so" | while read file; do
+            if [[ $file == *"armeabi-v7a"* ]]; then
+              cp "$file" final-dist/armeabi-v7a/
+            elif [[ $file == *"arm64-v8a"* ]]; then
+              cp "$file" final-dist/arm64-v8a/
+            fi
+          done
           
-          echo "Итоговый пакет:"
-          ls -R final-package/
+          ls -R final-dist/
 
-      - name: Upload Complete Build
+      - name: Upload Final Build
         uses: actions/upload-artifact@v4
         with:
-          name: samp-mobile-complete
-          path: final-package/
+          name: samp-mobile-complete-so
+          path: final-dist/
