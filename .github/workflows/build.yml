@@ -41,7 +41,7 @@ jobs:
       - name: Configure Application.mk for ${{ matrix.arch }}
         run: |
           # Создаем Application.mk с нужными параметрами
-          cat > jni/Application.mk << EOF
+          cat > Application.mk << EOF
           APP_ABI := ${{ matrix.arch }}
           APP_PLATFORM := android-16
           APP_STL := c++_static
@@ -51,7 +51,7 @@ jobs:
           EOF
           
           echo "Application.mk настроен для ${{ matrix.arch }}:"
-          cat jni/Application.mk
+          cat Application.mk
 
       - name: Configure server IP
         run: |
@@ -71,15 +71,15 @@ jobs:
           fi
           
           # Создаем резервную копию
-          cp jni/main.cpp jni/main.cpp.backup
+          cp main.cpp main.cpp.backup
           
           # Заменяем адрес сервера
-          sed -i "s/encryptedAddress\.decrypt()/\"$SERVER_IP\"/g" jni/main.cpp
-          sed -i "s/port,/$SERVER_PORT,/g" jni/main.cpp
+          sed -i "s/encryptedAddress\.decrypt()/\"$SERVER_IP\"/g" main.cpp
+          sed -i "s/port,/$SERVER_PORT,/g" main.cpp
           
           echo "IP и порт установлены: $SERVER_IP:$SERVER_PORT"
           echo "Изменения в main.cpp:"
-          grep -A 3 -B 3 "CNetGame" jni/main.cpp || true
+          grep -A 3 -B 3 "CNetGame" main.cpp || true
 
       - name: Build with ndk-build for ${{ matrix.arch }}
         run: |
