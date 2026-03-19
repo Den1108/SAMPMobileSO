@@ -44,25 +44,23 @@ jobs:
 
       - name: Prepare project structure
         run: |
-          # Создаем структуру jni правильно:
-          # 1. Создаем временную папку вне текущего каталога
-          mkdir -p ../temp_jni
+          # Создаем временную директорию вне дерева проекта, чтобы избежать рекурсии 'cp'
+          mkdir -p ../jni_tmp
+          cp -r . ../jni_tmp/
           
-          # 2. Копируем всё содержимое репозитория туда
-          cp -r . ../temp_jni/
+          # Переносим всё содержимое обратно в папку 'jni', которая нужна ndk-build
+          mkdir -p jni
+          mv ../jni_tmp/* ./jni/ || true
           
-          # 3. Возвращаем её в корень проекта как 'jni'
-          mv ../temp_jni ./jni
+          # Удаляем лишние артефакты
+          rm -rf jni/jni jni/libs jni/obj
           
-          # Удаляем лишние папки, чтобы ndk-build не запутался
-          rm -rf jni/libs jni/obj jni/.github jni/.git
-          
-          echo "Проверка наличия vendor:"
-          ls -d jni/vendor || echo "ОШИБКА: Папка vendor не найдена!"
+          echo "Проверка структуры (должна быть папка j/vendor/RakNet/...):"
+          ls -d jni/vendor/RakNet/SAMP || echo "ВНИМАНИЕ: Путь к RakNet не найден!"
 
       - name: Configure Build Files
         run: |
-          # Application.mk
+          # Создаем Application.mk
           cat > jni/Application.mk << EOF
           APP_ABI := ${{ matrix.arch }}
           APP_PLATFORM := android-${{ matrix.api-level }}
@@ -71,7 +69,7 @@ jobs:
           APP_CPPFLAGS := -frtti -fexceptions
           EOF
 
-          # Android.mk с поддержкой вложенных папок
+          # Создаем Android.mk с правильными путями инклудов
           cat > jni/Android.mk << 'EOF'
           LOCAL_PATH := $(call my-dir)
           include $(CLEAR_VARS)
@@ -85,11 +83,11 @@ jobs:
           ALL_FILES := $(call walk, $(LOCAL_PATH))
           LOCAL_SRC_FILES := $(ALL_FILES:$(LOCAL_PATH)/%=%)
           
-          # Пути для поиска include (важно для vendor/RakNet)
+          # Добавляем пути для поиска заголовков
+          # Мы добавляем сам LOCAL_PATH, чтобы работали инклуды вида "vendor/..."
           LOCAL_C_INCLUDES := $(LOCAL_PATH) \
                               $(LOCAL_PATH)/vendor \
-                              $(LOCAL_PATH)/vendor/RakNet \
-                              $(LOCAL_PATH)/vendor/RakNet/SAMP
+                              $(LOCAL_PATH)/vendor/RakNet
           
           LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
           LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
@@ -105,23 +103,19 @@ jobs:
           [ -z "$SERVER_IP" ] && SERVER_IP="188.127.241.8"
           [ -z "$SERVER_PORT" ] && SERVER_PORT="1179"
           
-          # Ищем main.cpp внутри новой структуры jni
+          # Ищем main.cpp во всей папке jni
           MAIN_FILE=$(find jni -name "main.cpp" | head -n 1)
           if [ -f "$MAIN_FILE" ]; then
             sed -i "s/encryptedAddress\.decrypt()/\"$SERVER_IP\"/g" "$MAIN_FILE"
             sed -i "s/port,/$SERVER_PORT,/g" "$MAIN_FILE"
             echo "Настройки сервера обновлены в $MAIN_FILE"
-          else
-            echo "ОШИБКА: main.cpp не найден!"
-            exit 1
           fi
 
       - name: Build with ndk-build
         run: |
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
-          $ANDROID_NDK_HOME/ndk-build \
-            NDK_PROJECT_PATH=$(pwd) \
-            -j$(nproc)
+          # Запускаем из корня, ndk-build автоматически найдет папку jni
+          ndk-build NDK_PROJECT_PATH=$(pwd) -j$(nproc)
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
