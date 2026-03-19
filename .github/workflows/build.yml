@@ -28,12 +28,6 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
       - name: Setup Android NDK
         id: setup-ndk
         uses: nttld/setup-ndk@v1
@@ -42,25 +36,28 @@ jobs:
           add-to-path: true
           local-cache: true
 
-      - name: Prepare project structure
+      - name: Prepare JNI Folder
         run: |
-          # Создаем временную директорию вне дерева проекта, чтобы избежать рекурсии 'cp'
-          mkdir -p ../jni_tmp
-          cp -r . ../jni_tmp/
+          # 1. Создаем чистую папку jni
+          mkdir -p jni_new
           
-          # Переносим всё содержимое обратно в папку 'jni', которая нужна ndk-build
-          mkdir -p jni
-          mv ../jni_tmp/* ./jni/ || true
+          # 2. Копируем всё содержимое репозитория в jni_new
+          # Используем rsync или cp -v для контроля
+          cp -R ./* jni_new/ 2>/dev/null || true
           
-          # Удаляем лишние артефакты
-          rm -rf jni/jni jni/libs jni/obj
+          # 3. Убираем саму папку jni_new из копии (если попала) и другие лишние данные
+          rm -rf jni_new/jni_new jni_new/libs jni_new/obj
           
-          echo "Проверка структуры (должна быть папка j/vendor/RakNet/...):"
-          ls -d jni/vendor/RakNet/SAMP || echo "ВНИМАНИЕ: Путь к RakNet не найден!"
+          # 4. Переименовываем в jni (как хочет ndk-build)
+          mv jni_new jni
+          
+          # Проверяем физическое наличие файла перед сборкой
+          echo "Проверка пути к файлу:"
+          find jni/vendor -name "samp_netencr.h" || echo "ФАЙЛ НЕ НАЙДЕН!"
 
-      - name: Configure Build Files
+      - name: Create Build Configs
         run: |
-          # Создаем Application.mk
+          # Application.mk
           cat > jni/Application.mk << EOF
           APP_ABI := ${{ matrix.arch }}
           APP_PLATFORM := android-${{ matrix.api-level }}
@@ -69,13 +66,13 @@ jobs:
           APP_CPPFLAGS := -frtti -fexceptions
           EOF
 
-          # Создаем Android.mk с правильными путями инклудов
+          # Android.mk
           cat > jni/Android.mk << 'EOF'
           LOCAL_PATH := $(call my-dir)
           include $(CLEAR_VARS)
           LOCAL_MODULE := samp
           
-          # Рекурсивный поиск всех .cpp файлов
+          # Находим все .cpp файлы рекурсивно
           define walk
               $(wildcard $(1)/*.cpp) $(foreach e, $(wildcard $(1)/*), $(call walk, $(e)))
           endef
@@ -83,43 +80,42 @@ jobs:
           ALL_FILES := $(call walk, $(LOCAL_PATH))
           LOCAL_SRC_FILES := $(ALL_FILES:$(LOCAL_PATH)/%=%)
           
-          # Добавляем пути для поиска заголовков
-          # Мы добавляем сам LOCAL_PATH, чтобы работали инклуды вида "vendor/..."
+          # Указываем пути поиска заголовков принудительно
           LOCAL_C_INCLUDES := $(LOCAL_PATH) \
                               $(LOCAL_PATH)/vendor \
-                              $(LOCAL_PATH)/vendor/RakNet
+                              $(LOCAL_PATH)/vendor/RakNet \
+                              $(LOCAL_PATH)/vendor/RakNet/SAMP
           
-          LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
-          LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2
+          # Добавляем флаг инклуда прямо в CFLAGS для надежности
+          LOCAL_CFLAGS := -DANDROID -D_ANDROID -fPIC -O2 -I$(LOCAL_PATH) -I$(LOCAL_PATH)/vendor
           LOCAL_CPPFLAGS := -frtti -fexceptions -std=c++11
+          LOCAL_LDLIBS := -llog -landroid -lEGL -lGLESv1_CM -lGLESv2 -lz
           
           include $(BUILD_SHARED_LIBRARY)
           EOF
 
-      - name: Configure server IP and Port
+      - name: Patch Server Info
         run: |
           SERVER_IP="${{ secrets.SERVER_IP }}"
           SERVER_PORT="${{ secrets.SERVER_PORT }}"
           [ -z "$SERVER_IP" ] && SERVER_IP="188.127.241.8"
           [ -z "$SERVER_PORT" ] && SERVER_PORT="1179"
           
-          # Ищем main.cpp во всей папке jni
+          # Ищем main.cpp и заменяем данные
           MAIN_FILE=$(find jni -name "main.cpp" | head -n 1)
-          if [ -f "$MAIN_FILE" ]; then
+          if [ -n "$MAIN_FILE" ]; then
             sed -i "s/encryptedAddress\.decrypt()/\"$SERVER_IP\"/g" "$MAIN_FILE"
             sed -i "s/port,/$SERVER_PORT,/g" "$MAIN_FILE"
-            echo "Настройки сервера обновлены в $MAIN_FILE"
+            echo "Обновлен $MAIN_FILE"
           fi
 
-      - name: Build with ndk-build
+      - name: Run Build
         run: |
           export ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}
-          # Запускаем из корня, ndk-build автоматически найдет папку jni
-          ndk-build NDK_PROJECT_PATH=$(pwd) -j$(nproc)
+          $ANDROID_NDK_HOME/ndk-build NDK_PROJECT_PATH=$(pwd) -j$(nproc)
 
-      - name: Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: libsamp-${{ matrix.arch }}
           path: libs/${{ matrix.arch }}/libsamp.so
-          if-no-files-found: error
